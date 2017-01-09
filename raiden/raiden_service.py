@@ -24,6 +24,7 @@ from raiden.encoding import messages
 from raiden.messages import SignedMessage
 from raiden.network.protocol import RaidenProtocol
 from raiden.utils import privatekey_to_address, isaddress, pex, GLOBAL_CTX
+from raiden.transfer.mediated_transfer.events import MediatedTransfer
 
 log = slogging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -95,12 +96,13 @@ class RaidenService(object):  # pylint: disable=too-many-instance-attributes
         self.protocol = RaidenProtocol(transport, discovery, self)
         transport.protocol = self.protocol
 
-        message_handler = RaidenMessageHandler(self)
-        event_handler = RaidenEventHandler(self)
+        blockchain_log_handler = BlockchainLogHandler(self)
+        message_handler = MessageHandler(self)
+        state_machine_event_handler = StateMachineEventHandler(self)
 
         alarm = AlarmTask(chain)
         # ignore the blocknumber
-        alarm.register_callback(lambda _: event_handler.poll_all_event_listeners())
+        alarm.register_callback(lambda _: blockchain_log_handler.poll_all_event_listeners())
         alarm.start()
 
         self._blocknumber = alarm.last_block_number
@@ -118,12 +120,14 @@ class RaidenService(object):  # pylint: disable=too-many-instance-attributes
 
         self.api = RaidenAPI(self)
         self.alarm = alarm
-        self.event_handler = event_handler
+        self.blockchain_log_handler = blockchain_log_handler
         self.message_handler = message_handler
-        self.start_event_listener = event_handler.start_event_listener
+        self.state_machine_event_handler = state_machine_event_handler
+        self.start_event_listener = blockchain_log_handler.start_event_listener
 
         self.on_message = message_handler.on_message
-        self.on_event = event_handler.on_event
+        self.on_log = blockchain_log_handler.on_log
+        self.on_event = state_machine_event_handler.on_event
 
     def __repr__(self):
         return '<{} {}>'.format(self.__class__.__name__, pex(self.address))
@@ -134,12 +138,14 @@ class RaidenService(object):  # pylint: disable=too-many-instance-attributes
     def get_block_number(self):
         return self._blocknumber
 
-    def get_manager_by_asset_address(self, asset_address_bin):
+    def get_manager_by_token_address(self, token_address_bin):
         """ Return the manager for the given `asset_address_bin`.  """
         try:
-            return self.managers_by_asset_address[asset_address_bin]
+            return self.managers_by_asset_address[token_address_bin]
         except KeyError:
-            raise UnknownAssetAddress(asset_address_bin)
+            raise UnknownAssetAddress(token_address_bin)
+
+    get_manager_by_asset_address = get_manager_by_token_address  # TODO: remove this
 
     def get_manager_by_address(self, manager_address_bin):
         return self.managers_by_address[manager_address_bin]
@@ -323,7 +329,7 @@ class RaidenService(object):  # pylint: disable=too-many-instance-attributes
         for asset_manager in self.managers_by_asset_address.itervalues():
             wait_for.extend(asset_manager.transfermanager.transfertasks.itervalues())
 
-        self.event_handler.uninstall_listeners()
+        self.blockchain_log_handler.uninstall_listeners()
         gevent.wait(wait_for)
 
 
@@ -573,7 +579,7 @@ class RaidenAPI(object):
                 asset_manager.transfermanager.register_callback_for_result(callback)
 
 
-class RaidenMessageHandler(object):
+class MessageHandler(object):
     """ Class responsible to handle the protocol messages.
 
     Note:
@@ -670,7 +676,36 @@ class RaidenMessageHandler(object):
         asset_manager.transfermanager.on_mediatedtransfer_message(message)
 
 
-class RaidenEventHandler(object):
+class StateMachineEventHandler(object):
+    def __init__(self, raiden):
+        self.raiden = raiden
+
+    def on_event(self, event):
+        if isinstance(event, MediatedTransfer):
+            next_hop = event.node_address
+            fee = 0
+
+            asset_manager = self.raiden.get_manager_by_token_address(event.token)
+            channel = asset_manager.get_channel_by_partner_address(next_hop)
+
+            mediated_transfer = channel.create_mediatedtransfer(
+                self.raiden.address,
+                event.target,
+                fee,
+                event.amount,
+                event.message_id,
+                event.expiration,
+                event.hashlock,
+            )
+
+            self.raiden.sign(mediated_transfer)
+            self.raiden.send_async(next_hop, mediated_transfer)
+
+            # TODO: implement the network timeout raiden.config['msg_timeout']
+            # and cancel the current transfer it hapens
+
+
+class BlockchainLogHandler(object):
     """ Class responsible to handle all the blockchain events.
 
     Note:
@@ -707,7 +742,7 @@ class RaidenEventHandler(object):
                 try:
                     # intentionally forcing all the events to go through
                     # the event handler
-                    self.on_event(originating_contract, event)
+                    self.on_log(originating_contract, event)
                 except:  # pylint: disable=bare-except
                     log.exception('unexpected exception on log listener')
 
@@ -723,7 +758,7 @@ class RaidenEventHandler(object):
 
         self.event_listeners = list()
 
-    def on_event(self, emitting_contract_address_bin, event):  # pylint: disable=unused-argument
+    def on_log(self, emitting_contract_address_bin, event):  # pylint: disable=unused-argument
         if log.isEnabledFor(logging.DEBUG):
             log.debug(
                 'event received',
