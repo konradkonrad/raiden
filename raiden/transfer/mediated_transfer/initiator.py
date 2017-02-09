@@ -5,6 +5,8 @@ from raiden.transfer.architecture import Iteration
 from raiden.transfer.state import RoutesState
 from raiden.transfer.mediated_transfer.state import (
     InitiatorState,
+    state_wait_secretrequest,
+    state_wait_unlock,
     LockedTransferState,
 )
 from raiden.transfer.mediated_transfer.transition import update_route
@@ -313,9 +315,9 @@ def state_transition(state, state_change):
 
     sync_machine_state(state, state_change)
 
-    if state.state_wait_secretrequest:
+    if state_wait_secretrequest(state):
         iteration = wait_secretrequest_transitions(state, state_change)
-    elif state.state_wait_unlock:
+    elif state_wait_unlock(state):
         iteration = wait_unlock_transitions(state, state_change)
 
     if iteration is None:

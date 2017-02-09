@@ -26,13 +26,13 @@ class InitiatorState(State):
         self.revealsecret = None
         self.canceled_transfers = list()
 
-    @property
-    def state_wait_secretrequest(self):
-        return self.revealsecret is None
 
-    @property
-    def state_wait_unlock(self):
-        return self.revealsecret is not None
+def state_wait_secretrequest(state):
+    return isinstance(state, InitiatorState) and state.revealsecret is None
+
+
+def state_wait_unlock(state):
+    return isinstance(state, InitiatorState) and state.revealsecret is not None
 
 
 class MediatorState(State):
