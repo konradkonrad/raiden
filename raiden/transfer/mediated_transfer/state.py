@@ -26,6 +26,14 @@ class InitiatorState(State):
         self.revealsecret = None
         self.canceled_transfers = list()
 
+    @property
+    def state_wait_secretrequest(self):
+        return self.revealsecret is None
+
+    @property
+    def state_wait_unlock(self):
+        return self.revealsecret is not None
+
 
 class MediatorState(State):
     """ State of a node mediating a transfer.

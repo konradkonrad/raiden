@@ -157,8 +157,151 @@ def try_new_route(next_state):
     return iteration
 
 
+def sync_machine_state(state, state_change):
+    """State modifications that are not a protocol iteration.
+    """
+    if isinstance(state_change, Blocknumber):
+        state.block_number = state_change.block_number
+
+    elif isinstance(state_change, RouteChange):
+        update_route(state, state_change)
+
+
+def init_transition(state_change):
+    # Init state and try the first available route
+    if isinstance(state_change, InitInitiator):
+        # assumes this is a clean RoutesState
+        assert isinstance(state_change.routes, RoutesState)
+        routes = deepcopy(state_change.routes)
+
+        state = InitiatorState(
+            state_change.our_address,
+            state_change.transfer,
+            routes,
+            state_change.block_number,
+            state_change.random_generator,
+        )
+
+        iteration = try_new_route(state)
+    return iteration
+
+
+def wait_secretrequest_transitions(state, state_change):
+    # 1- Target received the mediated transfer and sent a secretrequest.
+    # 2- The mediated transfer failed mid flight and we need to try a new route.
+    iteration = None
+    if isinstance(state_change, SecretRequestReceived):
+        valid_secretrequest = (
+            state_change.sender == state.transfer.target and
+            state_change.hashlock == state.transfer.hashlock and
+            state_change.identifier == state.transfer.identifier and
+            state_change.amount == state.transfer.amount
+        )
+
+        invalid_secretrequest = (
+            state_change.sender == state.transfer.target and
+            state_change.hashlock == state.transfer.hashlock and
+
+            not valid_secretrequest
+        )
+    else:
+        valid_secretrequest = False
+        invalid_secretrequest = False
+
+    # The initiator does not care if the TransferRefundReceived has a valid
+    # hashlock and amount since the current secret will be discarded
+    refund_transfer = (
+        isinstance(state_change, TransferRefundReceived) and
+        state_change.sender == state.route.node_address
+    )
+
+    cancel_transfer = (
+        isinstance(state_change, CancelRoute) and
+        state_change.identifier == state.transfer.identifier
+    )
+
+    if valid_secretrequest:
+        # Reveal the secret to the target node and wait for it's
+        # confirmation, at this point the transfer is not cancellable
+        # anymore.
+        #
+        # Note: The target might be the first hop
+        #
+        reveal_secret = RevealSecretTo(
+            state.transfer.identifier,
+            state.transfer.secret,
+            state.transfer.target,
+            state.our_address,
+        )
+
+        state.revealsecret = reveal_secret
+        iteration = Iteration(state, [reveal_secret])
+
+    elif invalid_secretrequest or refund_transfer or cancel_transfer:
+        # anything out-of-the-ordinary happened
+        iteration = cancel_current_route(state)
+
+    elif isinstance(state_change, CancelTransfer):
+        # the raiden user (could be another software) asked for the
+        # transfer to be canceled
+        iteration = user_cancel_transfer(state)
+
+    return iteration
+
+
+def wait_unlock_transitions(state, state_change):
+    secret_reveal = (
+        isinstance(state_change, SecretRevealReceived) and
+        state_change.sender == state.route.node_address
+    )
+
+    if secret_reveal:
+        # next hop learned the secret, unlock the token locally and send
+        # the withdraw message to next hop
+        unlock_lock = RevealSecretTo(
+            state.transfer.identifier,
+            state.transfer.secret,
+            state.route.node_address,
+            state.our_address,
+        )
+
+        return Iteration(None, [unlock_lock])
+    return None
+
+
 def state_transition(state, state_change):
     """ State machine for a node starting a mediated transfer.
+
+    State diagramm:
+        [[START]]
+         InitInitator           -v ? -o
+        [WAIT_SECRETREQUEST]
+         SecretRequestReceived  -v ? -> {cancel_current_route}
+         CancelTransfer         -jEND
+         TransferRefundReceived -> {cancel_current_route} ? -o
+         CancelRoute            -> {cancel_current_route} ? -o
+        [WAIT_UNLOCK]
+         SecretRevealReceived   -v ? -o
+        [[END]]
+
+    Sub machines:
+        cancel_current_route (routes_available ? -o : -jEND)
+
+    Notation:
+     progress:
+        -o:                 stay
+        -v:                 progress down
+        -^:                 move back up
+        -j<STATE>:          jump to <STATE>
+        -> {sub machine}:   enter sub machine
+        <valid? transition> ? <invalid? transition>
+     states:
+        [STATE]:    defined machine state
+        [[STATE]]:  machine start/end state
+     transitions:
+        StateTransition:    legal state transition input at current STATE
+
+
     Args:
         state: the current State that is transitioned from
         state_change: the state_change that will be applied
@@ -166,117 +309,15 @@ def state_transition(state, state_change):
     # pylint: disable=too-many-locals,too-many-branches,too-many-statements
 
     if state is None:
-        state_uninitialized = True
-        state_wait_secretrequest = False
-        state_wait_unlock = False
-    else:
-        state_uninitialized = False
-        state_wait_secretrequest = state.revealsecret is None
-        state_wait_unlock = state.revealsecret is not None
+        return init_transition(state_change)
 
-    iteration = Iteration(state, list())
+    sync_machine_state(state, state_change)
 
-    if not state_uninitialized:
-        if isinstance(state_change, Blocknumber):
-            state.block_number = state_change.block_number
+    if state.state_wait_secretrequest:
+        iteration = wait_secretrequest_transitions(state, state_change)
+    elif state.state_wait_unlock:
+        iteration = wait_unlock_transitions(state, state_change)
 
-        elif isinstance(state_change, RouteChange):
-            update_route(state, state_change)
-
-    # Init state and try the first available route
-    if state_uninitialized:
-        if isinstance(state_change, InitInitiator):
-            # assumes this is a clean RoutesState
-            assert isinstance(state_change.routes, RoutesState)
-            routes = deepcopy(state_change.routes)
-
-            state = InitiatorState(
-                state_change.our_address,
-                state_change.transfer,
-                routes,
-                state_change.block_number,
-                state_change.random_generator,
-            )
-
-            iteration = try_new_route(state)
-
-    # 1- Target received the mediated transfer and sent a secretrequest.
-    # 2- The mediated transfer failed mid flight and we need to try a new route.
-    elif state_wait_secretrequest:
-
-        if isinstance(state_change, SecretRequestReceived):
-            valid_secretrequest = (
-                state_change.sender == state.transfer.target and
-                state_change.hashlock == state.transfer.hashlock and
-                state_change.identifier == state.transfer.identifier and
-                state_change.amount == state.transfer.amount
-            )
-
-            invalid_secretrequest = (
-                state_change.sender == state.transfer.target and
-                state_change.hashlock == state.transfer.hashlock and
-
-                not valid_secretrequest
-            )
-        else:
-            valid_secretrequest = False
-            invalid_secretrequest = False
-
-        # The initiator does not care if the TransferRefundReceived has a valid
-        # hashlock and amount since the current secret will be discarded
-        refund_transfer = (
-            isinstance(state_change, TransferRefundReceived) and
-            state_change.sender == state.route.node_address
-        )
-
-        cancel_transfer = (
-            isinstance(state_change, CancelRoute) and
-            state_change.identifier == state.transfer.identifier
-        )
-
-        if valid_secretrequest:
-            # Reveal the secret to the target node and wait for it's
-            # confirmation, at this point the transfer is not cancellable
-            # anymore.
-            #
-            # Note: The target might be the first hop
-            #
-            reveal_secret = RevealSecretTo(
-                state.transfer.identifier,
-                state.transfer.secret,
-                state.transfer.target,
-                state.our_address,
-            )
-
-            state.revealsecret = reveal_secret
-            iteration = Iteration(state, [reveal_secret])
-
-        elif invalid_secretrequest or refund_transfer or cancel_transfer:
-            # anything out-of-the-ordinary happened
-            iteration = cancel_current_route(state)
-
-        elif isinstance(state_change, CancelTransfer):
-            # the raiden user (could be another software) asked for the
-            # transfer to be canceled
-            iteration = user_cancel_transfer(state)
-
-    elif state_wait_unlock:
-
-        secret_reveal = (
-            isinstance(state_change, SecretRevealReceived) and
-            state_change.sender == state.route.node_address
-        )
-
-        if secret_reveal:
-            # next hop learned the secret, unlock the token locally and send
-            # the withdraw message to next hop
-            unlock_lock = RevealSecretTo(
-                state.transfer.identifier,
-                state.transfer.secret,
-                state.route.node_address,
-                state.our_address,
-            )
-
-            iteration = Iteration(None, [unlock_lock])
-
+    if iteration is None:
+        iteration = Iteration(state, list())
     return iteration
