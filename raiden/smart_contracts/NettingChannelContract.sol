@@ -77,7 +77,7 @@ contract NettingChannelContract {
     /// @param theirs_encoded The last transfer recieved from our partner.
     function close(bytes theirs_encoded) {
         data.close(theirs_encoded);
-        ChannelClosed(msg.sender, data.closed);
+        ChannelClosed(msg.sender, 0);
     }
 
     /// @notice Dispute the state after closing, called by the counterparty (the
@@ -86,7 +86,7 @@ contract NettingChannelContract {
     ///                       state of the first participant.
     function updateTransfer(bytes theirs_encoded) {
         data.updateTransfer(theirs_encoded);
-        TransferUpdated(msg.sender, block.number);
+        TransferUpdated(msg.sender, 0);
     }
 
     /// @notice Unlock a locked transfer.
@@ -105,7 +105,7 @@ contract NettingChannelContract {
     ///         have passed.
     function settle() {
         data.settle();
-        ChannelSettled(data.settled);
+        ChannelSettled(0);
     }
 
     /// @notice Returns the number of blocks until the settlement timeout.
