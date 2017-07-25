@@ -16,6 +16,7 @@ __all__ = (
     'LockedTransfer',
     'MediatedTransfer',
     'RefundTransfer',
+    'BalanceUpdate',
 )
 
 log = getLogger(__name__)  # pylint: disable=invalid-name
@@ -268,7 +269,7 @@ class RevealSecret(SignedMessage):
 
     This message is not sufficient for state changes in the raiden Channel, the
     reason is that a node participating in split transfer or in both mediated
-    transfer for an exchange might can reveal the secret to it's partners, but
+    transfer for an exchange can reveal the secret to its partners, but
     that must not update the internal channel state.
     """
     cmdid = messages.REVEALSECRET
@@ -679,6 +680,77 @@ class RefundTransfer(MediatedTransfer):
         return locked_transfer
 
 
+class BalanceUpdate(SignedMessage):
+    # TODO: this could just be merged with `Secret` to save network traffic
+    """ A message between two channel partners, that updates the partner balance to
+    include the amount of a previously unlocked LockedTransfer.
+
+    Signs the unidirectional settled `balance` of `token` to `recipient` plus
+    locked transfers (excluding the unlocked transfer with the same `identifier`).
+
+    Settled refers to the inclusion of formerly locked amounts.
+    Locked amounts are not included in the balance yet, but represented
+    by the `locksroot`.
+
+    Args:
+        identifier: the identifier of the LockedTransfer whose lock is now excluded from
+            locksroot.
+        nonce: A sequential nonce, used to protected against replay attacks and
+            to give a total order for the messages. This nonce is per
+            participant, not shared.
+        token: The address of the token being exchanged in the channel.
+        transferred_amount: The total amount of token that was transferred to
+            the channel partner. This value is monotonically increasing and can
+            be larger than a channels deposit, since the channels are
+            bidirecional.
+        recipient: The address of the raiden node participating in the channel.
+        locksroot: The root of a merkle tree which records the current
+            outstanding locks.
+    """
+
+    cmdid = messages.BALANCEUPDATE
+
+    def __init__(self, identifier, nonce, token, transferred_amount, recipient, locksroot):
+        assert_transfer_values(
+            identifier,
+            nonce,
+            token,
+            transferred_amount,
+            recipient,
+        )
+
+        super(BalanceUpdate, self).__init__()
+        self.identifier = identifier
+        self.nonce = nonce
+        self.token = token
+        self.transferred_amount = transferred_amount  #: total amount of token sent to partner
+        self.recipient = recipient  #: partner's address
+        self.locksroot = locksroot  #: the merkle root that represent all pending locked transfers
+
+    @staticmethod
+    def unpack(packed):
+        transfer = BalanceUpdate(
+            packed.identifier,
+            packed.nonce,
+            packed.token,
+            packed.transferred_amount,
+            packed.recipient,
+            packed.locksroot,
+        )
+        transfer.signature = packed.signature
+
+        return transfer
+
+    def pack(self, packed):
+        packed.identifier = self.identifier
+        packed.nonce = self.nonce
+        packed.token = self.token
+        packed.transferred_amount = self.transferred_amount
+        packed.recipient = self.recipient
+        packed.locksroot = self.locksroot
+        packed.signature = self.signature
+
+
 CMDID_TO_CLASS = {
     messages.ACK: Ack,
     messages.PING: Ping,
@@ -688,4 +760,5 @@ CMDID_TO_CLASS = {
     messages.DIRECTTRANSFER: DirectTransfer,
     messages.MEDIATEDTRANSFER: MediatedTransfer,
     messages.REFUNDTRANSFER: RefundTransfer,
+    messages.BALANCEUPDATE: BalanceUpdate,
 }

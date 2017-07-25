@@ -22,6 +22,7 @@ from raiden.transfer.mediated_transfer.state_change import (
 )
 from raiden.transfer.events import (
     EventTransferSentSuccess,
+    EventTransferReceivedSuccess,
 )
 from raiden.transfer.mediated_transfer.events import (
     EventUnlockSuccess,
@@ -330,7 +331,7 @@ def test_fullnetwork(
     assert app2_state_changes[3].secret == secret
 
     # check app2 state events
-    assert len(app2_events) == 2
+    assert len(app2_events) == 3
     assert isinstance(app2_events[0], SendSecretRequest)
     assert app2_events[0].amount == amount
     assert app2_events[0].hashlock == hashlock
@@ -340,3 +341,6 @@ def test_fullnetwork(
     assert app2_events[1].secret == secret
     assert app2_events[1].receiver == app3.raiden.address
     assert app2_events[1].sender == app2.raiden.address
+    assert isinstance(app2_events[2], EventTransferReceivedSuccess)
+    assert app2_events[2].amount == amount
+    assert app2_events[2].initiator == app0.raiden.address

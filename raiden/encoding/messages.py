@@ -45,6 +45,7 @@ DIRECTTRANSFER_CMDID = 5
 MEDIATEDTRANSFER_CMDID = 7
 REFUNDTRANSFER_CMDID = 8
 REVEALSECRET_CMDID = 11
+BALANCEUPDATE_CMDID = 12
 
 ACK = to_bigendian(ACK_CMDID)
 PING = to_bigendian(PING_CMDID)
@@ -54,6 +55,7 @@ REVEALSECRET = to_bigendian(REVEALSECRET_CMDID)
 DIRECTTRANSFER = to_bigendian(DIRECTTRANSFER_CMDID)
 MEDIATEDTRANSFER = to_bigendian(MEDIATEDTRANSFER_CMDID)
 REFUNDTRANSFER = to_bigendian(REFUNDTRANSFER_CMDID)
+BALANCEUPDATE = to_bigendian(BALANCEUPDATE_CMDID)
 
 
 # pylint: disable=invalid-name
@@ -203,6 +205,20 @@ Lock = namedbuffer(
     ]
 )
 
+BalanceUpdate = namedbuffer(
+    'balance_update',
+    [
+        cmdid(BALANCEUPDATE),   # [0:1]
+        pad(3),                 # [1:4]
+        nonce,                  # [4:12]
+        identifier,             # [12:20]
+        token,                  # [20:40]
+        recipient,              # [40:60]
+        transferred_amount,
+        optional_locksroot,
+        signature,
+    ]
+)
 
 CMDID_MESSAGE = {
     ACK: Ack,
@@ -213,6 +229,7 @@ CMDID_MESSAGE = {
     DIRECTTRANSFER: DirectTransfer,
     MEDIATEDTRANSFER: MediatedTransfer,
     REFUNDTRANSFER: RefundTransfer,
+    BALANCEUPDATE: BalanceUpdate,
 }
 
 

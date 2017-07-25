@@ -25,6 +25,7 @@ from raiden.transfer.mediated_transfer.state_change import (
     ReceiveSecretRequest,
     ReceiveSecretReveal,
     ReceiveTransferRefund,
+    ReceiveBalanceProof,
 )
 from raiden.transfer.state_change import ReceiveTransferDirect
 from raiden.utils import pex, sha3
@@ -74,6 +75,9 @@ class RaidenMessageHandler(object):
 
         elif cmdid == messages.REFUNDTRANSFER:
             self.message_refundtransfer(message)
+
+        elif cmdid == messages.BALANCEUPDATE:
+            self.message_balanceupdate(message)
 
         else:
             raise Exception("Unhandled message cmdid '{}'.".format(cmdid))
@@ -220,6 +224,43 @@ class RaidenMessageHandler(object):
             state_change_id,
             [receive_success],
             self.raiden.get_block_number()
+        )
+
+    def message_balanceupdate(self, message):
+        if message.token not in self.raiden.token_to_channelgraph:
+            raise UnknownTokenAddress('Unknown token address {}'.format(pex(message.token)))
+
+        if message.token in self.blocked_tokens:
+            raise TransferUnwanted()
+
+        graph = self.raiden.token_to_channelgraph[message.token]
+
+        if not graph.has_channel(self.raiden.address, message.sender):
+            raise UnknownAddress(
+                'Balance update from node without an existing channel: {}'.format(
+                    pex(message.sender),
+                )
+            )
+
+        channel = graph.partneraddress_to_channel[message.sender]
+
+        if channel.state != CHANNEL_STATE_OPENED:
+            raise TransferWhenClosed(
+                'Balance update received for a closed channel: {}'.format(
+                    pex(channel.channel_address),
+                )
+            )
+
+        amount = message.transferred_amount - channel.partner_state.transferred_amount
+        # FIXME: what kind of transfer_state do we need here?
+        transfer_state = None
+        state_change = ReceiveBalanceProof(
+            message.sender,
+            transfer_state,
+        )
+        self.raiden.state_machine_event_handler.log_and_dispatch_by_identifier(
+            message.identifier,
+            state_change,
         )
 
     def message_mediatedtransfer(self, message):

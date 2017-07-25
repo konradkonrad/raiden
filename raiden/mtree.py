@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 from __future__ import division
-# -*- coding: utf-8 -*-
 from raiden.utils import keccak
 from raiden.exceptions import HashLengthNot32
 

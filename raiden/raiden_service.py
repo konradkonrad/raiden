@@ -75,6 +75,7 @@ from raiden.messages import (
     RevealSecret,
     Secret,
     SignedMessage,
+    BalanceUpdate,
 )
 from raiden.network.protocol import (
     RaidenProtocol,
@@ -436,16 +437,34 @@ class RaidenService(object):
         for channel in channels_list:
             # unlock a sent lock
             if channel.partner_state.balance_proof.is_unclaimed(hashlock):
+                log.DEV('unlock a sent lock')
                 channel.release_lock(secret)
                 self.send_async(
                     channel.partner_state.address,
                     our_secret_message,
+                )
+
+                our_balance_update = BalanceUpdate(
+                    identifier,
+                    channel.partner_state.nonce,
+                    token_address,
+                    channel.partner_state.transferred_amount,
+                    channel.partner_state.address,
+                    channel.partner_state.balance_proof.merkleroot_for_unclaimed(),
+                )
+                channel.partner_state.nonce += 1
+                self.sign(our_balance_update)
+                self.send_and_wait(
+                    channel.partner_state.address,
+                    our_balance_update,
+                    10,
                 )
                 channels_to_remove.append(channel)
 
             # withdraw a pending lock
             if channel.our_state.balance_proof.is_unclaimed(hashlock):
                 if partner_secret_message:
+                    log.DEV('withdraw a pending lock: partner_secret_message')
                     matching_sender = (
                         partner_secret_message.sender == channel.partner_state.address
                     )
@@ -461,6 +480,7 @@ class RaidenService(object):
                             revealsecret_message,
                         )
                 else:
+                    log.DEV('withdraw a pending lock: else')
                     channel.register_secret(secret)
                     self.send_async(
                         channel.partner_state.address,
