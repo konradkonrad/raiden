@@ -150,6 +150,7 @@ class AlarmTask(Runnable):
                     number=latest_block_number,
                     gas_limit=latest_block['gasLimit'],
                     block_hash=to_hex(latest_block['hash']),
+                    node=pex(self.chain.node_address),
                 )
 
                 if latest_block_number > last_block_number + 1:
@@ -158,6 +159,7 @@ class AlarmTask(Runnable):
                         'Missed block(s)',
                         missed_blocks=missed_blocks,
                         latest_block=latest_block,
+                        node=pex(self.chain.node_address),
                     )
 
                 self._run_callbacks(latest_block)
@@ -174,6 +176,7 @@ class AlarmTask(Runnable):
             block_number=latest_block['number'],
             gas_limit=latest_block['gasLimit'],
             block_hash=to_hex(latest_block['hash']),
+            node=pex(self.chain.node_address),
         )
 
         self._run_callbacks(latest_block)

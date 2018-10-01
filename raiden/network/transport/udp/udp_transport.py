@@ -219,8 +219,6 @@ class UDPTransport(Runnable):
         log.debug('UDP started', node=pex(self.raiden.address))
         super().start()
 
-        log.debug('UDP transport started')
-
     def _run(self):
         """ Runnable main method, perform wait on long-running subtasks """
         try:
@@ -266,6 +264,8 @@ class UDPTransport(Runnable):
 
         log.debug('UDP stopped', node=pex(self.raiden.address))
         self.queueids_to_queues = dict()
+
+        log.debug('UDP stopped', node=pex(self.raiden.address))
 
     def get_health_events(self, recipient):
         """ Starts a healthcheck task for `recipient` and returns a
