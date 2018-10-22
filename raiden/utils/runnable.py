@@ -71,6 +71,7 @@ class Runnable:
         )
         if not self.greenlet:
             return
+        self.greenlet.join()
         self.greenlet.kill(subtask.exception)
 
     # redirect missing members to underlying greenlet for compatibility
