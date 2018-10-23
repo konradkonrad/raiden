@@ -221,8 +221,6 @@ class MatrixTransport(Runnable):
         # parent may want to call get() after stop(), to ensure _run errors are re-raised
         # we don't call it here to avoid deadlock when self crashes and calls stop() on finally
 
-        self.log.debug('Matrix stopped', config=self._config)
-
     def _spawn(self, func: Callable, *args, **kwargs) -> gevent.Greenlet:
         """ Spawn a sub-task and ensures an error on it crashes self/main greenlet """
 
