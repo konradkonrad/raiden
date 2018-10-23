@@ -2,6 +2,7 @@ import socket
 
 import cachetools
 import gevent
+import gevent.pool
 import structlog
 from eth_utils import encode_hex, is_binary_address
 from gevent.event import AsyncResult, Event
@@ -196,7 +197,12 @@ class UDPTransport(Runnable):
         self.get_host_port = cache_wrapper(discovery.get)
 
         self.throttle_policy = throttle_policy
-        self.server = DatagramServer(udpsocket, handle=self.receive)
+        pool = gevent.pool.Pool()
+        self.server = DatagramServer(
+            udpsocket,
+            handle=self.receive,
+            spawn=pool,
+        )
 
     def start(
             self,
@@ -211,9 +217,11 @@ class UDPTransport(Runnable):
         self.message_handler = message_handler
         self.queueids_to_queues = dict()
 
-        # server.stop() clears the handle. Since this may be a restart the
-        # handle must always be set
+        # server.stop() clears the handle and the pool. Since this may be a
+        # restart the handle must always be set
         self.server.set_handle(self.receive)
+        pool = gevent.pool.Pool()
+        self.server.set_spawn(pool)
 
         self.server.start()
         log.debug('UDP started', node=pex(self.raiden.address))
