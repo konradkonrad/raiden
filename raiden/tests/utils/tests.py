@@ -1,7 +1,13 @@
 import gc
+import json
+import os
+import tempfile
+from functools import partial
 from itertools import chain, combinations, product
+from sqlite3 import ProgrammingError
 
 import gevent
+from eth_utils import to_checksum_address
 
 
 def cleanup_tasks():
@@ -14,8 +20,63 @@ def cleanup_tasks():
     gevent.hub.reinit()
 
 
-def shutdown_apps_and_cleanup_tasks(raiden_apps):
-    for app in raiden_apps:
+DB_DUMP_PATH = '/tmp/dings/'
+
+
+def shutdown_apps_and_cleanup_tasks(raiden_apps, name):
+
+    def fix(data):
+        """Fix double json encoding of `*Record.data` fields."""
+        assert isinstance(data, list)
+        fixed = []
+        for record in data:
+            if isinstance(record, tuple):
+                new_record = tuple()
+                record_data = record.data
+                for v in record:
+                    if v == record_data:
+                        new_record += (json.loads(record.data), )
+                    else:
+                        new_record += (v, )
+                fixed.append(new_record)
+            elif isinstance(record, str) and record.startswith('{'):
+                fixed.append(json.loads(record))
+            else:
+                fixed.append(record)
+        return fixed
+
+    def flat(it):
+        return [item for sublist in it for item in sublist]
+
+    for num, app in enumerate(raiden_apps):
+        address = to_checksum_address(app.raiden.address)
+        batch = 500
+        tmppath = tempfile.mktemp(prefix=DB_DUMP_PATH, suffix=name + str(num))
+        for kind, call in (
+                (
+                    'events',
+                    partial(app.raiden.wal.storage.batch_query_event_records, batch),
+                ),
+                (
+                    'state_changes',
+                    partial(app.raiden.wal.storage.batch_query_state_changes, batch),
+                ),
+                (
+                    'snapshots',
+                    app.raiden.wal.storage.get_snapshots,
+                ),
+        ):
+            fn = f'{tmppath}-{kind}-{address}.json'
+            try:
+                with open(fn, 'w', encoding='utf-8') as f:
+                    dump = fix(flat(call()))
+                    json.dump(dump, f, indent=2)
+            except ProgrammingError as e:
+                print(e)
+                assert tmppath.startswith(DB_DUMP_PATH)
+                assert tmppath.startswith('/tmp')
+                assert len(tmppath) > len(DB_DUMP_PATH)
+                os.remove(fn)
         app.stop()
 
     # Two tests in sequence could run a UDP server on the same port, a hanging

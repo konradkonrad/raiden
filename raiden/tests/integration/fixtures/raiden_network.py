@@ -49,7 +49,9 @@ def raiden_chain(
         blockchain_type,
         contracts_path,
         user_deposit_address,
+        request,
 ):
+    name = request.node.name
 
     if len(token_addresses) != 1:
         raise ValueError('raiden_chain only works with a single token')
@@ -132,7 +134,7 @@ def raiden_chain(
 
     yield raiden_apps
 
-    shutdown_apps_and_cleanup_tasks(raiden_apps)
+    shutdown_apps_and_cleanup_tasks(raiden_apps, name)
 
 
 @pytest.fixture
@@ -162,7 +164,9 @@ def raiden_network(
         blockchain_type,
         contracts_path,
         user_deposit_address,
+        request,
 ):
+    name = request.node.name
     service_registry_address = None
     if blockchain_services.service_registry:
         service_registry_address = blockchain_services.service_registry.address
@@ -234,4 +238,4 @@ def raiden_network(
 
     yield raiden_apps
 
-    shutdown_apps_and_cleanup_tasks(raiden_apps)
+    shutdown_apps_and_cleanup_tasks(raiden_apps, name)
