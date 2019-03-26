@@ -111,6 +111,7 @@ URLS_V1 = [
     (
         '/channels',
         ChannelsResource,
+        'channels_resource',
     ),
     (
         '/channels/<hexaddress:token_address>',
