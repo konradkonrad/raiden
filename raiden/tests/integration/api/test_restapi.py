@@ -19,7 +19,6 @@ from raiden.constants import (
     RED_EYES_PER_CHANNEL_PARTICIPANT_LIMIT,
     SECRET_HASH_HEXSTRING_LENGTH,
     SECRET_HEXSTRING_LENGTH,
-    UINT256_MAX,
     Environment,
 )
 from raiden.messages import LockedTransfer, Unlock
@@ -27,10 +26,11 @@ from raiden.tests.integration.api.utils import create_api_server
 from raiden.tests.utils import factories
 from raiden.tests.utils.client import burn_eth
 from raiden.tests.utils.events import check_dict_nested_attrs, must_have_event, must_have_events
+from raiden.tests.utils.factories import make_address
 from raiden.tests.utils.network import CHAIN
 from raiden.tests.utils.protocol import HoldRaidenEvent, WaitForMessage
 from raiden.tests.utils.smartcontracts import deploy_contract_web3
-from raiden.transfer import views
+from raiden.transfer import channel, views
 from raiden.transfer.state import CHANNEL_STATE_CLOSED, CHANNEL_STATE_OPENED
 from raiden.utils import sha3
 from raiden.waiting import wait_for_transfer_success
@@ -2053,26 +2053,54 @@ def test_payment_events_endpoints(api_server_test_instance, raiden_network, toke
     app2_server.stop()
 
 
-@pytest.mark.parametrize('number_of_nodes', [2])
-def test_payment_exceeding_balance(api_server_test_instance, raiden_network, token_addresses):
-    _, app1 = raiden_network
-    identifier1 = 42
+@pytest.mark.parametrize('channels_per_node', [1])
+@pytest.mark.parametrize('number_of_nodes', [3])
+def test_payment_exceeding_balance(raiden_network, token_addresses):
+    _, app1, app2 = raiden_network
+    identifier = 42
     token_address = token_addresses[0]
 
     # sender_address = app0.raiden.address
-    target_address = app1.raiden.address
+    target_address = app2.raiden.address
 
-    app1_server = create_api_server(app1, 8575)
+    app0_server = create_api_server(app1, 8575)
+    app1_server = create_api_server(app1, 8576)
+    # empty app1->app2 balance
+    amount = 200
 
-    # app0 is sending tokens to target 1
     request = grequests.post(
         api_url_for(
-            api_server_test_instance,
+            app1_server,
             'token_target_paymentresource',
             token_address=to_checksum_address(token_address),
             target_address=to_checksum_address(target_address),
         ),
-        json={'amount': UINT256_MAX, 'identifier': identifier1},
+        json={'amount': amount, 'identifier': identifier},
+    )
+    response = request.send().response
+    while response.status_code == 200:
+        identifier += 1
+        request = grequests.post(
+            api_url_for(
+                app1_server,
+                'token_target_paymentresource',
+                token_address=to_checksum_address(token_address),
+                target_address=to_checksum_address(target_address),
+            ),
+            json={'amount': amount, 'identifier': identifier},
+        )
+        response = request.send().response
+
+    assert_proper_response(response, HTTPStatus.CONFLICT)
+    # app0 is sending tokens to target 2 // 0>1 has balance, 1>2 does not
+    request = grequests.post(
+        api_url_for(
+            app0_server,
+            'token_target_paymentresource',
+            token_address=to_checksum_address(token_address),
+            target_address=to_checksum_address(target_address),
+        ),
+        json={'amount': amount, 'identifier': 41},
     )
     response = request.send().response
 
@@ -2088,29 +2116,119 @@ def test_payment_exceeding_balance(api_server_test_instance, raiden_network, tok
 
 
 @pytest.mark.parametrize('number_of_nodes', [2])
+@pytest.mark.parametrize('channels_per_node', [0])
+def test_payment_to_offline_newly_opened_node(
+        raiden_network,
+        token_addresses,
+):
+    app0, _ = raiden_network
+    token_address = token_addresses[0]
+    deposit = 10
+    target = make_address()
+    api_server = create_api_server(app0, 8575)
+    request = grequests.put(
+        api_url_for(
+            api_server,
+            'channels_resource',
+        ),
+        json=dict(
+            token_address=to_checksum_address(token_address),
+            partner_address=to_checksum_address(target),
+            total_deposit=deposit,
+            settle_timeout=200,
+        ),
+    )
+    response = request.send().response
+    assert_proper_response(response, HTTPStatus.CREATED)
+
+    chain_state = views.state_from_raiden(app0.raiden)
+
+    channel_state = views.get_channelstate_for(
+        chain_state=chain_state,
+        payment_network_id=views.get_payment_network_identifiers(chain_state)[0],
+        token_address=token_address,
+        partner_address=target,
+    )
+    assert channel.get_distributable(
+        channel_state.our_state,
+        channel_state.partner_state,
+    ) == deposit
+
+    request = grequests.post(
+        api_url_for(
+            api_server,
+            'token_target_paymentresource',
+            token_address=to_checksum_address(token_address),
+            target_address=to_checksum_address(target),
+        ),
+        json={'amount': 1, 'identifier': 5},
+    )
+    response = request.send().response
+    assert_proper_response(response, HTTPStatus.CONFLICT)
+
+    error_msg = (
+        "Payment couldn't be completed "
+        "(insufficient funds, no route to target or target offline)"
+    )
+    response = response.json()
+    assert error_msg in response['errors']
+
+
+@pytest.mark.parametrize('channels_per_node', [1])
+@pytest.mark.parametrize('number_of_nodes', [3])
 def test_payment_exceeding_balance_for_offline_node(
         api_server_test_instance,
         raiden_network,
         token_addresses,
 ):
-    _, app1 = raiden_network
-    identifier1 = 42
+    app0, app1, app2 = raiden_network
+    identifier = 42
+    amount = 200
     token_address = token_addresses[0]
 
     # sender_address = app0.raiden.address
-    target_address = app1.raiden.address
+    target_address = app2.raiden.address
+    app0_neighbours = views.all_neighbour_nodes(views.state_from_raiden(app0.raiden))
+    app1_neighbours = views.all_neighbour_nodes(views.state_from_raiden(app1.raiden))
+    app2_neighbours = views.all_neighbour_nodes(views.state_from_raiden(app2.raiden))
 
-    app1.stop()
+    # app0 is connected with both
+    assert len(app0_neighbours) > len(app1_neighbours)
+    assert len(app0_neighbours) > len(app2_neighbours)
 
-    # app0 is sending tokens to target
+    assert target_address not in app1_neighbours
+
+    app1_server = create_api_server(app1, 8576)
+
+    # app1 is sending tokens to target
     request = grequests.post(
         api_url_for(
-            api_server_test_instance,
+            app1_server,
             'token_target_paymentresource',
             token_address=to_checksum_address(token_address),
             target_address=to_checksum_address(target_address),
         ),
-        json={'amount': UINT256_MAX, 'identifier': identifier1},
+        json={'amount': 1, 'identifier': identifier},
+    )
+    response = request.send().response
+
+    assert_proper_response(response, HTTPStatus.OK)
+
+    amount -= 2
+
+    app0.stop()
+    app0.raiden.stop()
+    app0.raiden.stop_event.wait()
+
+    # app1 is sending tokens to target
+    request = grequests.post(
+        api_url_for(
+            app1_server,
+            'token_target_paymentresource',
+            token_address=to_checksum_address(token_address),
+            target_address=to_checksum_address(target_address),
+        ),
+        json={'amount': amount, 'identifier': identifier},
     )
     response = request.send().response
 
