@@ -116,7 +116,9 @@ def state_change_with_nonce(
     )
 
 
-def print_attributes(data: Dict, translator: Optional[Translator] = None) -> None:
+def print_attributes(
+    data: Dict, translator: Optional[Translator] = None, color: Optional[bool] = None
+) -> None:
     if translator is None:
         trans = lambda s: s
     else:
@@ -125,21 +127,27 @@ def print_attributes(data: Dict, translator: Optional[Translator] = None) -> Non
         if isinstance(value, bytes):
             value = encode_hex(value)
 
-        click.echo("\t", nl=False)
-        click.echo(click.style(key, fg="blue"), nl=False)
-        click.echo(click.style("="), nl=False)
-        click.echo(click.style(trans(repr(value)), fg="yellow"))
+        click.secho("\t", nl=False, color=color)
+        click.secho(key, fg="blue", nl=False, color=color)
+        click.secho("=", nl=False, color=color)
+        click.secho(trans(repr(value)), fg="yellow", color=color)
 
 
-def print_state_change(state_change: StateChange, translator: Optional[Translator] = None) -> None:
-    click.echo(click.style(f"> {state_change.__class__.__name__}", fg="red", bold=True))
-    print_attributes(state_change.__dict__, translator=translator)
+def print_state_change(
+    state_change: StateChange,
+    translator: Optional[Translator] = None,
+    color: Optional[bool] = None,
+) -> None:
+    click.secho(f"> {state_change.__class__.__name__}", fg="red", bold=True, color=color)
+    print_attributes(state_change.__dict__, translator=translator, color=color)
 
 
-def print_events(events: Iterable[Event], translator: Optional[Translator] = None) -> None:
+def print_events(
+    events: Iterable[Event], translator: Optional[Translator] = None, color: Optional[bool] = None
+) -> None:
     for event in events:
-        click.echo(click.style(f"< {event.__class__.__name__}", fg="green", bold=True))
-        print_attributes(event.__dict__, translator=translator)
+        click.secho(f"< {event.__class__.__name__}", fg="green", bold=True, color=color)
+        print_attributes(event.__dict__, translator=translator, color=color)
 
 
 def replay_wal(
@@ -147,6 +155,7 @@ def replay_wal(
     token_network_address: TokenNetworkAddress,
     partner_address: Address,
     translator: Optional[Translator] = None,
+    color: Optional[bool] = None,
 ) -> None:
     all_state_changes = storage.get_statechanges_by_range(RANGE_ALL_STATE_CHANGES)
 
@@ -175,15 +184,17 @@ def replay_wal(
         # An example would be to add `import pdb; pdb.set_trace()`
         # and inspect the state.
         ###
-
-        print_state_change(state_change, translator=translator)
-        print_events(chain.from_iterable(events), translator=translator)
+        print_state_change(state_change, translator=translator, color=color)
+        print_events(chain.from_iterable(events), translator=translator, color=color)
 
 
 @click.command(help=__doc__)
 @click.argument("db-file", type=click.Path(exists=True))
 @click.argument("token-network-address")
 @click.argument("partner-address")
+@click.option(
+    "-C", "--color", help="Enforce color output, e.g. for paging into `less -r`", is_flag=True
+)
 @click.option(
     "-x",
     "--names-translator",
@@ -194,7 +205,7 @@ def replay_wal(
     'checksummed) with "[Bob]" and all mentions of "identifier" with "[XXX]. '
     'It also allows you to use "Bob" as parameter value for "-n" and "-p" switches.',
 )
-def main(db_file, token_network_address, partner_address, names_translator):
+def main(db_file, token_network_address, partner_address, names_translator, color):
     translator: Optional[Translator]
 
     if names_translator:
@@ -214,6 +225,7 @@ def main(db_file, token_network_address, partner_address, names_translator):
             token_network_address=token_network_address,
             partner_address=partner_address,
             translator=translator,
+            color=color if color else None,
         )
 
 
