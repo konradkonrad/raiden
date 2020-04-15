@@ -1,4 +1,5 @@
 import datetime
+import gevent
 import json
 import os
 import sys
@@ -506,22 +507,60 @@ def options(func: Callable) -> Callable:
     return func
 
 
+def enable_greenlet_debugger():
+    """ Enable the pdb debugger for gevent's greenlets.
+    """
+    import pdb
+    import bdb
+
+    # Do not run pdb again if an exception hits top-level for a second
+    # greenlet and the previous pdb session is still running
+    enabled = False
+    hub = gevent.get_hub()
+
+    def debugger(context, type_, value, tb):
+        # Always print the exception, because once the pdb REPL is started
+        # we cannot retrieve it with `sys.exc_info()`.
+        #
+        # Using gevent's hub print_exception because it properly handles
+        # corner cases.
+        hub.print_exception(context, type_, value, tb)
+
+        # Don't enter nested sessions
+        # Ignore exceptions used to quit the debugger / interpreter
+        nonlocal enabled
+        if not enabled and type_ not in (bdb.BdbQuit, KeyboardInterrupt):
+            enabled = True
+            pdb.post_mortem(t=tb)  # pylint: disable=no-member
+            enabled = False
+
+    # Hooking the debugger on the hub error handler. Exceptions that are
+    # not handled on a given greenlet are forwarded to the
+    # parent.handle_error, until the hub is reached.
+    #
+    # Note: for this to work properly, it's really important to use
+    # gevent's spawn function.
+    hub.handle_error = debugger
+
+
 @group(invoke_without_command=True, context_settings={"max_content_width": 120})
 @options
 @click.pass_context
 def run(ctx: Context, **kwargs: Any) -> None:
     # pylint: disable=too-many-locals,too-many-branches,too-many-statements
 
+    enable_greenlet_debugger()
+
     if kwargs["config_file"]:
         apply_config_file(run, kwargs, ctx)
 
-    configure_logging(
-        kwargs["log_config"],
-        log_json=kwargs["log_json"],
-        log_file=kwargs["log_file"],
-        disable_debug_logfile=kwargs["disable_debug_logfile"],
-        debug_log_file_path=kwargs["debug_logfile_path"],
-    )
+    # configure_logging(
+    #     kwargs["log_config"],
+    #     log_json=kwargs["log_json"],
+    #     log_file=kwargs["log_file"],
+    #     disable_debug_logfile=kwargs["disable_debug_logfile"],
+    #     debug_log_file_path=kwargs["debug_logfile_path"],
+    # )
 
     flamegraph = kwargs.pop("flamegraph", None)
     switch_tracing = kwargs.pop("switch_tracing", None)
