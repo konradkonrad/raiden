@@ -126,7 +126,6 @@ scenario:
 
             ## Monitored channel must be settled before the monitoring service can claim its reward.
             ## To make sure the transactions gets mined in time, 5 additional blocks are added
-            ## Monitoring Service only reacts for the second closing because node4 settled to first
-            ## channel itself
+            ## Monitoring Service only reacts for the second closing.
             - wait_blocks: 5
             - assert_ms_claim: {channel_info_key: "MS Test Channel 1-2"}
