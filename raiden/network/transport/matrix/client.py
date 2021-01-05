@@ -243,7 +243,7 @@ class GMatrixHttpApi(MatrixHttpApi):
         # to avoid them getting stuck when listener greenlet is killed
         if path in self._long_paths:
             with self._priority_lock:
-                return super()._send(method, path, *args, **kwargs)
+                return self.__send(method, path, *args, **kwargs)
         last_ex = None
         for delay in self.retry_delay():
             try:
