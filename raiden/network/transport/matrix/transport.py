@@ -784,16 +784,24 @@ class MatrixTransport(Runnable):
             existing_room.send_text(serialized_message)
 
         while not self._stop_event.ready():
+            log.debug("Broadcast not stopped", qsize=self._broadcast_queue.qsize())
             self._broadcast_event.clear()
             messages: Dict[str, List[Message]] = defaultdict(list)
             while self._broadcast_queue.qsize() > 0:
+                log.debug("Broadcast looping", qsize=self._broadcast_queue.qsize())
                 room_name, message = self._broadcast_queue.get()
+                log.debug("Broadcast got message", room_name=room_name, message=message)
                 messages[room_name].append(message)
             for room_name, messages_for_room in messages.items():
+                log.debug(
+                    "Broadcast iterating messages", room_name=room_name, messages=messages_for_room
+                )
                 serialized_messages = (
                     MessageSerializer.serialize(message) for message in messages_for_room
                 )
+                log.debug("Broadcast serialzed", room_name=room_name, messages=serialized_messages)
                 for message_batch in make_message_batches(serialized_messages):
+                    log.debug("Broadcast batch", room_name=room_name, batch=message_batch)
                     _broadcast(room_name, message_batch)
                 for _ in messages_for_room:
                     # Every message needs to be marked as done.
