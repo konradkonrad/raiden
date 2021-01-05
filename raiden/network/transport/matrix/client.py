@@ -1,4 +1,5 @@
 import itertools
+import json
 import time
 from datetime import datetime
 from functools import wraps
@@ -10,15 +11,15 @@ from uuid import UUID, uuid4
 import gevent
 import structlog
 from eth_typing import HexStr
-from gevent import Greenlet
+from gevent import Greenlet, sleep
 from gevent.event import Event
 from gevent.lock import Semaphore
-from matrix_client.api import MatrixHttpApi
+from matrix_client.api import MATRIX_V2_API_PATH, MatrixHttpApi
 from matrix_client.client import CACHE, MatrixClient
-from matrix_client.errors import MatrixHttpLibError, MatrixRequestError
+from matrix_client.errors import MatrixError, MatrixHttpLibError, MatrixRequestError
 from matrix_client.room import Room as MatrixRoom
 from matrix_client.user import User
-from requests import Response
+from requests import RequestException, Response
 from requests.adapters import HTTPAdapter
 
 from raiden.constants import Environment
@@ -164,6 +165,74 @@ class GMatrixHttpApi(MatrixHttpApi):
             self.retry_delay: Callable[[], Iterable[float]] = lambda: repeat(1)
         else:
             self.retry_delay = retry_delay
+
+    def __send(
+        self,
+        method,
+        path,
+        content=None,
+        query_params=None,
+        headers=None,
+        api_path=MATRIX_V2_API_PATH,
+    ):
+        if query_params is None:
+            query_params = {}
+        if headers is None:
+            headers = {}
+        method = method.upper()
+        if method not in ["GET", "PUT", "DELETE", "POST"]:
+            raise MatrixError("Unsupported HTTP method: %s" % method)
+
+        if "Content-Type" not in headers:
+            headers["Content-Type"] = "application/json"
+
+        query_params["access_token"] = self.token
+        if self.identity:
+            query_params["user_id"] = self.identity
+
+        endpoint = self.base_url + api_path + path
+
+        if headers["Content-Type"] == "application/json" and content is not None:
+            content = json.dumps(content)
+
+        while True:
+            try:
+                response = self.session.request(
+                    method,
+                    endpoint,
+                    params=query_params,
+                    data=content,
+                    headers=headers,
+                    verify=self.validate_cert,
+                )
+            except RequestException as e:
+                raise MatrixHttpLibError(e, method, endpoint)
+
+            if response.status_code == 429:
+                log.debug(
+                    "got 429'ed",
+                    method=method,
+                    path=path,
+                    content=content,
+                    query_params=query_params,
+                )
+                waittime = self.default_429_wait_ms / 1000
+                try:
+                    waittime = response.json()["retry_after_ms"] / 1000
+                except KeyError:
+                    try:
+                        errordata = json.loads(response.json()["error"])
+                        waittime = errordata["retry_after_ms"] / 1000
+                    except KeyError:
+                        pass
+                sleep(waittime)
+            else:
+                break
+
+        if response.status_code < 200 or response.status_code >= 300:
+            raise MatrixRequestError(code=response.status_code, content=response.text)
+
+        return response.json()
 
     def _send(self, method: str, path: str, *args: Any, **kwargs: Any) -> Dict:
         # we use an infinite loop + time + sleep instead of gevent.Timeout
